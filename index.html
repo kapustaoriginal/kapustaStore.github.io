@@ -49,7 +49,6 @@
         .spinning { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         
-        /* Стили для управления разворачиванием текста */
         .desc-container {
             position: relative;
             overflow: hidden;
@@ -59,6 +58,7 @@
             display: -webkit-box;
             -webkit-line-clamp: 3;
             -webkit-box-orient: vertical;
+            overflow: hidden;
         }
         .desc-expanded {
             display: block;
@@ -118,7 +118,7 @@
                 <input type="hidden" id="editingAppId">
                 <input type="text" id="appTitle" placeholder="Название" required class="form-input">
                 <input type="text" id="appCategory" placeholder="Категория" required class="form-input">
-                <input type="text" id="appPrice" placeholder="Цена" required class="form-input">
+                <input type="text" id="appPrice" placeholder="Цена (например: 10$ или 0)" required class="form-input">
                 <input type="text" id="appImage" placeholder="URL иконки" class="form-input">
                 <input type="url" id="appDownloadUrl" placeholder="Ссылка на скачивание" required class="form-input md:col-span-2">
                 <textarea id="appDesc" placeholder="Описание..." class="form-input md:col-span-2 h-24 resize-none"></textarea>
@@ -151,13 +151,14 @@
         <div class="bg-white dark:bg-slate-800 rounded-2xl p-6 max-w-md w-full">
             <h3 class="text-lg font-bold mb-4">GitHub Sync</h3>
             <div class="space-y-3">
-                <input type="password" id="ghToken" placeholder="GitHub Token" class="form-input text-xs">
-                <input type="text" id="ghGistId" placeholder="Gist ID" class="form-input text-xs">
+                <input type="password" id="ghToken" placeholder="GitHub Personal Access Token" class="form-input text-xs">
+                <input type="text" id="ghGistId" placeholder="Gist ID (оставьте пустым для создания нового)" class="form-input text-xs">
             </div>
             <div class="grid grid-cols-2 gap-3 mt-6">
                 <button onclick="syncToCloud('load')" class="bg-slate-100 dark:bg-slate-700 py-2 rounded-lg text-sm">Загрузить</button>
                 <button onclick="syncToCloud('save')" class="bg-blue-600 text-white py-2 rounded-lg text-sm">Сохранить</button>
             </div>
+            <p class="text-[10px] text-slate-400 mt-4 leading-tight">Для синхронизации создайте Gist на GitHub и получите Token (scopes: gist).</p>
         </div>
     </div>
 
@@ -183,14 +184,13 @@
             }
 
             const savedToken = localStorage.getItem('gh_token');
-            const rawGistId = localStorage.getItem('gh_gist_id') || DEFAULT_GIST_ID;
-            const cleanGistId = rawGistId.split('/').pop();
+            const savedGistId = localStorage.getItem('gh_gist_id') || DEFAULT_GIST_ID;
             
             if(savedToken) document.getElementById('ghToken').value = savedToken;
-            document.getElementById('ghGistId').value = cleanGistId;
+            document.getElementById('ghGistId').value = savedGistId;
 
             loadCachedApps();
-            if (cleanGistId) await refreshData(true);
+            if (savedGistId) await refreshData(true);
             lucide.createIcons();
         });
 
@@ -258,14 +258,19 @@
                 
                 const data = await res.json();
                 const file = data.files[GIST_FILENAME];
-                if (!file || !file.content) {
-                    apps = [];
-                } else {
-                    const bytes = CryptoJS.AES.decrypt(file.content, ENCRYPTION_KEY);
-                    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-                    apps = decrypted ? JSON.parse(decrypted) : [];
+                
+                if (file && file.content) {
+                    try {
+                        const bytes = CryptoJS.AES.decrypt(file.content, ENCRYPTION_KEY);
+                        const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+                        apps = decrypted ? JSON.parse(decrypted) : [];
+                    } catch(e) {
+                        console.error("Decrypt error", e);
+                        apps = [];
+                    }
                 }
                 
+                // Cache locally
                 const ciphertext = CryptoJS.AES.encrypt(JSON.stringify(apps), ENCRYPTION_KEY).toString();
                 localStorage.setItem('secure_apps_cache', ciphertext);
                 
@@ -273,7 +278,6 @@
                 if(!isSilent) showToast("Данные обновлены");
             } catch (err) {
                 if(!isSilent) showToast("Ошибка синхронизации", true);
-                console.error(err);
             } finally {
                 if(icon) icon.classList.remove('spinning');
             }
@@ -288,28 +292,42 @@
 
             if (!token) return showToast("Нужен GitHub Token!", true);
             localStorage.setItem('gh_token', token);
-            localStorage.setItem('gh_gist_id', cleanGistId);
+            if(cleanGistId) localStorage.setItem('gh_gist_id', cleanGistId);
 
             try {
-                const content = CryptoJS.AES.encrypt(JSON.stringify(apps), ENCRYPTION_KEY).toString();
-                const body = { files: { [GIST_FILENAME]: { content } } };
+                const encryptedContent = CryptoJS.AES.encrypt(JSON.stringify(apps), ENCRYPTION_KEY).toString();
+                const body = { 
+                    description: "kapusta Store Data",
+                    public: false,
+                    files: { [GIST_FILENAME]: { content: encryptedContent } } 
+                };
+                
+                const method = cleanGistId ? "PATCH" : "POST";
                 const url = cleanGistId ? `https://api.github.com/gists/${cleanGistId}` : "https://api.github.com/gists";
                 
                 const res = await fetch(url, { 
-                    method: cleanGistId ? "PATCH" : "POST", 
-                    headers: { "Authorization": `token ${token}` }, 
+                    method: method, 
+                    headers: { 
+                        "Authorization": `token ${token}`,
+                        "Content-Type": "application/json"
+                    }, 
                     body: JSON.stringify(body) 
                 });
                 
                 if (!res.ok) throw new Error("Sync failed");
                 const data = await res.json();
+                
                 if (!cleanGistId) {
                     document.getElementById('ghGistId').value = data.id;
                     localStorage.setItem('gh_gist_id', data.id);
                 }
-                showToast("Сохранено!");
+                
+                showToast("Сохранено в облако!");
                 toggleModal('syncModal');
-            } catch (err) { showToast("Ошибка сохранения", true); }
+            } catch (err) { 
+                showToast("Ошибка сохранения", true); 
+                console.error(err);
+            }
         }
 
         function adminLogin(e) {
@@ -336,7 +354,7 @@
                 title: document.getElementById('appTitle').value,
                 category: document.getElementById('appCategory').value,
                 price: document.getElementById('appPrice').value === '0' ? "Бесплатно" : document.getElementById('appPrice').value,
-                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${encodeURIComponent(document.getElementById('appTitle').value)}`,
+                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${encodeURIComponent(document.getElementById('appTitle').value)}&background=random`,
                 desc: document.getElementById('appDesc').value,
                 downloadUrl: document.getElementById('appDownloadUrl').value
             };
@@ -345,16 +363,17 @@
                 const index = apps.findIndex(a => a.id == editingId);
                 if (index !== -1) {
                     apps[index] = { ...apps[index], ...appData };
-                    showToast("Обновлено");
+                    showToast("Приложение обновлено");
                 }
             } else {
                 const newApp = { ...appData, id: Date.now() };
                 apps.unshift(newApp);
-                showToast("Опубликовано");
+                showToast("Приложение добавлено");
             }
 
             resetForm();
             renderApps();
+            // Auto-sync if token exists
             if(localStorage.getItem('gh_token')) syncToCloud('save');
         }
 
@@ -392,7 +411,6 @@
             if(localStorage.getItem('gh_token')) syncToCloud('save');
         }
 
-        // Функция для развертывания описания
         function toggleDesc(id) {
             const p = document.getElementById(`desc-${id}`);
             const btn = document.getElementById(`btn-desc-${id}`);
@@ -423,51 +441,55 @@
             empty.classList.add('hidden');
             dataToRender.forEach(app => {
                 const card = document.createElement('div');
-                card.className = "relative bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col h-full fade-in";
+                card.className = "relative bg-white dark:bg-slate-800 rounded-3xl p-5 shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col h-full fade-in";
                 
                 let adminControls = '';
                 if(isAdmin) {
                     adminControls = `
-                        <div class="absolute top-3 right-3 flex gap-1 z-10">
-                            <button onclick="startEditApp(${app.id})" class="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition" title="Редактировать">
+                        <div class="absolute top-4 right-4 flex gap-1 z-10">
+                            <button onclick="startEditApp(${app.id})" class="p-2 bg-white/90 dark:bg-slate-700/90 shadow-sm text-blue-500 hover:text-blue-600 rounded-xl transition">
                                 <i data-lucide="edit-3" class="w-4 h-4"></i>
                             </button>
-                            <button onclick="deleteApp(${app.id})" class="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition" title="Удалить">
+                            <button onclick="deleteApp(${app.id})" class="p-2 bg-white/90 dark:bg-slate-700/90 shadow-sm text-red-500 hover:text-red-600 rounded-xl transition">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
                         </div>
                     `;
                 }
 
-                // Исправлено: текст заголовка теперь переносится (break-words), а pr-12 резервирует место под иконки админа
                 card.innerHTML = `
                     ${adminControls}
-                    <img src="${app.image}" class="w-16 h-16 rounded-2xl mb-4 object-cover shadow-sm bg-slate-100 dark:bg-slate-700" onerror="this.src='https://ui-avatars.com/api/?name=Error'">
-                    <h3 class="font-bold text-lg dark:text-white break-words pr-12 min-h-[1.75rem]">${app.title}</h3>
+                    <div class="mb-4">
+                        <img src="${app.image}" class="w-20 h-20 rounded-[2rem] object-cover shadow-md bg-slate-100 dark:bg-slate-700" onerror="this.src='https://ui-avatars.com/api/?name=Error'">
+                    </div>
+                    <div class="pr-10">
+                        <h3 class="font-bold text-lg dark:text-white break-words leading-tight">${app.title}</h3>
+                    </div>
                     <div class="flex items-center justify-between mt-1 mb-3">
-                         <p class="text-xs text-slate-400 uppercase font-medium">${app.category}</p>
-                         <span class="text-xs font-bold ${app.price === 'Бесплатно' ? 'text-green-500' : 'text-blue-500'}">${app.price}</span>
+                         <p class="text-[10px] text-slate-400 uppercase tracking-widest font-bold">${app.category}</p>
+                         <span class="text-xs font-black ${app.price === 'Бесплатно' ? 'text-green-500' : 'text-blue-500'}">${app.price}</span>
                     </div>
                     
-                    <div class="flex-grow flex flex-col">
-                        <p id="desc-${app.id}" class="text-sm text-slate-600 dark:text-slate-300 desc-truncated mb-1">${app.desc || 'Нет описания'}</p>
-                        <button id="btn-desc-${app.id}" onclick="toggleDesc(${app.id})" class="text-blue-600 dark:text-blue-400 text-xs font-semibold text-left mb-5 hover:underline transition-all opacity-0 pointer-events-none">Подробнее</button>
+                    <div class="flex-grow flex flex-col mb-4">
+                        <p id="desc-${app.id}" class="text-sm text-slate-500 dark:text-slate-400 desc-truncated leading-relaxed">${app.desc || 'Нет описания для этого приложения.'}</p>
+                        <button id="btn-desc-${app.id}" onclick="toggleDesc(${app.id})" class="text-blue-600 dark:text-blue-400 text-xs font-bold text-left mt-1 hover:underline opacity-0 pointer-events-none transition-opacity">Подробнее</button>
                     </div>
 
-                    <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-2.5 rounded-xl font-bold transition hover:scale-[1.02] active:scale-[0.98]">
+                    <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-3 rounded-2xl font-bold transition-all hover:shadow-lg active:scale-95 flex items-center justify-center gap-2">
+                        <i data-lucide="download" class="w-4 h-4"></i>
                         Скачать
                     </button>
                 `;
                 grid.appendChild(card);
 
-                // Проверка, нужно ли показывать кнопку "Подробнее"
+                // Check overflow for "Read more" button
                 setTimeout(() => {
                     const descEl = document.getElementById(`desc-${app.id}`);
                     const btnEl = document.getElementById(`btn-desc-${app.id}`);
                     if(descEl && descEl.scrollHeight > descEl.clientHeight) {
                         btnEl.classList.remove('opacity-0', 'pointer-events-none');
                     }
-                }, 0);
+                }, 50);
             });
             
             lucide.createIcons();
