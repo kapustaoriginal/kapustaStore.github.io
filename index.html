@@ -94,15 +94,19 @@
         </div>
 
         <div id="adminPanel" class="hidden mb-8 bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-100 dark:border-slate-700 fade-in">
-            <h2 class="text-xl font-bold mb-4 flex items-center gap-2">Добавить приложение</h2>
-            <form id="addAppForm" onsubmit="addNewApp(event)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <h2 id="adminPanelTitle" class="text-xl font-bold mb-4 flex items-center gap-2">Добавить приложение</h2>
+            <form id="addAppForm" onsubmit="handleFormSubmit(event)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <input type="hidden" id="editingAppId">
                 <input type="text" id="appTitle" placeholder="Название" required class="form-input">
                 <input type="text" id="appCategory" placeholder="Категория" required class="form-input">
                 <input type="text" id="appPrice" placeholder="Цена" required class="form-input">
                 <input type="text" id="appImage" placeholder="URL иконки" class="form-input">
                 <input type="url" id="appDownloadUrl" placeholder="Ссылка на скачивание" required class="form-input md:col-span-2">
                 <textarea id="appDesc" placeholder="Описание..." class="form-input md:col-span-2 h-24 resize-none"></textarea>
-                <button type="submit" class="md:col-span-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition">Опубликовать</button>
+                <div class="md:col-span-2 flex gap-3">
+                    <button type="submit" id="formSubmitBtn" class="flex-grow bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition">Опубликовать</button>
+                    <button type="button" id="cancelEditBtn" onclick="resetForm()" class="hidden bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold py-2.5 px-6 rounded-xl transition">Отмена</button>
+                </div>
             </form>
         </div>
 
@@ -251,7 +255,7 @@
             } catch (err) {
                 if(!isSilent) showToast("Ошибка синхронизации", true);
             } finally {
-                if(!isSilent && icon) icon.classList.remove('animate-spin');
+                if(icon) icon.classList.remove('animate-spin');
             }
         }
 
@@ -304,21 +308,65 @@
 
         function logout() { isAdmin = false; location.reload(); }
 
-        function addNewApp(e) {
+        // --- ФУНКЦИИ РЕДАКТИРОВАНИЯ ---
+
+        function handleFormSubmit(e) {
             e.preventDefault();
-            const newApp = { 
-                id: Date.now(), 
-                title: document.getElementById('appTitle').value, 
-                category: document.getElementById('appCategory').value, 
-                price: document.getElementById('appPrice').value === '0' ? "Бесплатно" : document.getElementById('appPrice').value, 
-                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${document.getElementById('appTitle').value}`, 
-                desc: document.getElementById('appDesc').value, 
-                downloadUrl: document.getElementById('appDownloadUrl').value 
+            const editingId = document.getElementById('editingAppId').value;
+            
+            const appData = {
+                title: document.getElementById('appTitle').value,
+                category: document.getElementById('appCategory').value,
+                price: document.getElementById('appPrice').value === '0' ? "Бесплатно" : document.getElementById('appPrice').value,
+                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${document.getElementById('appTitle').value}`,
+                desc: document.getElementById('appDesc').value,
+                downloadUrl: document.getElementById('appDownloadUrl').value
             };
-            apps.unshift(newApp);
+
+            if (editingId) {
+                // Редактирование существующего
+                const index = apps.findIndex(a => a.id == editingId);
+                if (index !== -1) {
+                    apps[index] = { ...apps[index], ...appData };
+                    showToast("Обновлено");
+                }
+            } else {
+                // Добавление нового
+                const newApp = { ...appData, id: Date.now() };
+                apps.unshift(newApp);
+                showToast("Опубликовано");
+            }
+
+            resetForm();
             renderApps();
-            document.getElementById('addAppForm').reset();
             if(localStorage.getItem('gh_token')) syncToCloud('save');
+        }
+
+        function startEditApp(id) {
+            const app = apps.find(a => a.id === id);
+            if (!app) return;
+
+            document.getElementById('adminPanelTitle').innerText = "Редактировать приложение";
+            document.getElementById('formSubmitBtn').innerText = "Сохранить изменения";
+            document.getElementById('cancelEditBtn').classList.remove('hidden');
+            
+            document.getElementById('editingAppId').value = app.id;
+            document.getElementById('appTitle').value = app.title;
+            document.getElementById('appCategory').value = app.category;
+            document.getElementById('appPrice').value = app.price === "Бесплатно" ? "0" : app.price;
+            document.getElementById('appImage').value = app.image.startsWith('https://ui-avatars.com') ? '' : app.image;
+            document.getElementById('appDesc').value = app.desc;
+            document.getElementById('appDownloadUrl').value = app.downloadUrl;
+
+            document.getElementById('adminPanel').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function resetForm() {
+            document.getElementById('adminPanelTitle').innerText = "Добавить приложение";
+            document.getElementById('formSubmitBtn').innerText = "Опубликовать";
+            document.getElementById('cancelEditBtn').classList.add('hidden');
+            document.getElementById('editingAppId').value = "";
+            document.getElementById('addAppForm').reset();
         }
 
         function deleteApp(id) {
@@ -338,12 +386,24 @@
             dataToRender.forEach(app => {
                 grid.insertAdjacentHTML('beforeend', `
                     <div class="relative bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col h-full">
-                        ${isAdmin ? `<button onclick="deleteApp(${app.id})" class="absolute top-3 right-3 text-red-500"><i data-lucide="trash-2" class="w-4 h-4"></i></button>` : ''}
+                        ${isAdmin ? `
+                        <div class="absolute top-3 right-3 flex gap-2">
+                            <button onclick="startEditApp(${app.id})" class="text-blue-500 hover:text-blue-600 p-1">
+                                <i data-lucide="edit-3" class="w-4 h-4"></i>
+                            </button>
+                            <button onclick="deleteApp(${app.id})" class="text-red-500 hover:text-red-600 p-1">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        ` : ''}
                         <img src="${app.image}" class="w-16 h-16 rounded-2xl mb-4 object-cover">
                         <h3 class="font-bold text-lg dark:text-white">${app.title}</h3>
-                        <p class="text-xs text-slate-400 mb-2 uppercase">${app.category}</p>
-                        <p class="text-sm text-slate-600 dark:text-slate-300 flex-grow mb-4">${app.desc}</p>
-                        <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-2 rounded-xl">Скачать</button>
+                        <div class="flex items-center justify-between mt-1">
+                             <p class="text-xs text-slate-400 uppercase">${app.category}</p>
+                             <span class="text-xs font-bold ${app.price === 'Бесплатно' ? 'text-green-500' : 'text-blue-500'}">${app.price}</span>
+                        </div>
+                        <p class="text-sm text-slate-600 dark:text-slate-300 flex-grow my-4 line-clamp-3">${app.desc}</p>
+                        <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-2.5 rounded-xl font-bold transition hover:opacity-90">Скачать</button>
                     </div>
                 `);
             });
