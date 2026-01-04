@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>kapusta Store</title>
+    <!-- Tailwind CDN (предупреждение в консоли нормально для прототипов) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -45,6 +46,8 @@
             border-color: #3b82f6;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
         }
+        .spinning { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-300">
@@ -219,7 +222,7 @@
                     apps = JSON.parse(decrypted);
                     renderApps();
                 }
-            } catch (e) { apps = []; }
+            } catch (e) { console.error("Cache decrypt error", e); }
         }
 
         async function refreshData(isSilent = false) {
@@ -228,14 +231,14 @@
             const icon = document.getElementById('refreshIcon');
             
             if (!cleanGistId) return;
-            if(!isSilent && icon) icon.classList.add('animate-spin');
+            if(!isSilent && icon) icon.classList.add('spinning');
             
             try {
                 const token = localStorage.getItem('gh_token');
                 const headers = token ? { "Authorization": `token ${token}` } : {};
                 
                 const res = await fetch(`https://api.github.com/gists/${cleanGistId}`, { headers });
-                if (!res.ok) throw new Error();
+                if (!res.ok) throw new Error("Fetch failed");
                 
                 const data = await res.json();
                 const file = data.files[GIST_FILENAME];
@@ -254,8 +257,9 @@
                 if(!isSilent) showToast("Данные обновлены");
             } catch (err) {
                 if(!isSilent) showToast("Ошибка синхронизации", true);
+                console.error(err);
             } finally {
-                if(icon) icon.classList.remove('animate-spin');
+                if(icon) icon.classList.remove('spinning');
             }
         }
 
@@ -281,7 +285,7 @@
                     body: JSON.stringify(body) 
                 });
                 
-                if (!res.ok) throw new Error();
+                if (!res.ok) throw new Error("Sync failed");
                 const data = await res.json();
                 if (!cleanGistId) {
                     document.getElementById('ghGistId').value = data.id;
@@ -308,8 +312,6 @@
 
         function logout() { isAdmin = false; location.reload(); }
 
-        // --- ФУНКЦИИ РЕДАКТИРОВАНИЯ ---
-
         function handleFormSubmit(e) {
             e.preventDefault();
             const editingId = document.getElementById('editingAppId').value;
@@ -318,20 +320,18 @@
                 title: document.getElementById('appTitle').value,
                 category: document.getElementById('appCategory').value,
                 price: document.getElementById('appPrice').value === '0' ? "Бесплатно" : document.getElementById('appPrice').value,
-                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${document.getElementById('appTitle').value}`,
+                image: document.getElementById('appImage').value || `https://ui-avatars.com/api/?name=${encodeURIComponent(document.getElementById('appTitle').value)}`,
                 desc: document.getElementById('appDesc').value,
                 downloadUrl: document.getElementById('appDownloadUrl').value
             };
 
             if (editingId) {
-                // Редактирование существующего
                 const index = apps.findIndex(a => a.id == editingId);
                 if (index !== -1) {
                     apps[index] = { ...apps[index], ...appData };
                     showToast("Обновлено");
                 }
             } else {
-                // Добавление нового
                 const newApp = { ...appData, id: Date.now() };
                 apps.unshift(newApp);
                 showToast("Опубликовано");
@@ -354,7 +354,7 @@
             document.getElementById('appTitle').value = app.title;
             document.getElementById('appCategory').value = app.category;
             document.getElementById('appPrice').value = app.price === "Бесплатно" ? "0" : app.price;
-            document.getElementById('appImage').value = app.image.startsWith('https://ui-avatars.com') ? '' : app.image;
+            document.getElementById('appImage').value = app.image.includes('ui-avatars.com') ? '' : app.image;
             document.getElementById('appDesc').value = app.desc;
             document.getElementById('appDownloadUrl').value = app.downloadUrl;
 
@@ -370,7 +370,7 @@
         }
 
         function deleteApp(id) {
-            if(!confirm("Удалить?")) return;
+            if(!confirm("Вы уверены, что хотите удалить приложение?")) return;
             apps = apps.filter(a => a.id !== id);
             renderApps();
             if(localStorage.getItem('gh_token')) syncToCloud('save');
@@ -380,33 +380,49 @@
             const grid = document.getElementById('appsGrid');
             const empty = document.getElementById('emptyState');
             if(!grid) return;
+            
             grid.innerHTML = '';
-            if (dataToRender.length === 0) { empty.classList.remove('hidden'); return; }
+            if (dataToRender.length === 0) { 
+                empty.classList.remove('hidden'); 
+                return; 
+            }
+            
             empty.classList.add('hidden');
             dataToRender.forEach(app => {
-                grid.insertAdjacentHTML('beforeend', `
-                    <div class="relative bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col h-full">
-                        ${isAdmin ? `
-                        <div class="absolute top-3 right-3 flex gap-2">
-                            <button onclick="startEditApp(${app.id})" class="text-blue-500 hover:text-blue-600 p-1">
+                const card = document.createElement('div');
+                card.className = "relative bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-sm border border-slate-100 dark:border-slate-700 flex flex-col h-full fade-in";
+                
+                let adminControls = '';
+                if(isAdmin) {
+                    adminControls = `
+                        <div class="absolute top-3 right-3 flex gap-1">
+                            <button onclick="startEditApp(${app.id})" class="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition" title="Редактировать">
                                 <i data-lucide="edit-3" class="w-4 h-4"></i>
                             </button>
-                            <button onclick="deleteApp(${app.id})" class="text-red-500 hover:text-red-600 p-1">
+                            <button onclick="deleteApp(${app.id})" class="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition" title="Удалить">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
                         </div>
-                        ` : ''}
-                        <img src="${app.image}" class="w-16 h-16 rounded-2xl mb-4 object-cover">
-                        <h3 class="font-bold text-lg dark:text-white">${app.title}</h3>
-                        <div class="flex items-center justify-between mt-1">
-                             <p class="text-xs text-slate-400 uppercase">${app.category}</p>
-                             <span class="text-xs font-bold ${app.price === 'Бесплатно' ? 'text-green-500' : 'text-blue-500'}">${app.price}</span>
-                        </div>
-                        <p class="text-sm text-slate-600 dark:text-slate-300 flex-grow my-4 line-clamp-3">${app.desc}</p>
-                        <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-2.5 rounded-xl font-bold transition hover:opacity-90">Скачать</button>
+                    `;
+                }
+
+                card.innerHTML = `
+                    ${adminControls}
+                    <img src="${app.image}" class="w-16 h-16 rounded-2xl mb-4 object-cover shadow-sm bg-slate-100 dark:bg-slate-700" onerror="this.src='https://ui-avatars.com/api/?name=Error'">
+                    <h3 class="font-bold text-lg dark:text-white truncate pr-16">${app.title}</h3>
+                    <div class="flex items-center justify-between mt-1 mb-3">
+                         <p class="text-xs text-slate-400 uppercase font-medium">${app.category}</p>
+                         <span class="text-xs font-bold ${app.price === 'Бесплатно' ? 'text-green-500' : 'text-blue-500'}">${app.price}</span>
                     </div>
-                `);
+                    <p class="text-sm text-slate-600 dark:text-slate-300 flex-grow mb-5 line-clamp-3">${app.desc || 'Нет описания'}</p>
+                    <button onclick="window.open('${app.downloadUrl}', '_blank')" class="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-2.5 rounded-xl font-bold transition hover:scale-[1.02] active:scale-[0.98]">
+                        Скачать
+                    </button>
+                `;
+                grid.appendChild(card);
             });
+            
+            // Важно: пересоздаем иконки после рендера HTML
             lucide.createIcons();
         }
     </script>
