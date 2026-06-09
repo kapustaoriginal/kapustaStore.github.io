@@ -4,3 +4,4 @@
 
 
 09.06.2026: New Update kapusta Store V3!
+09.06.2026: New Update kapusta Store V3-Fix1!
